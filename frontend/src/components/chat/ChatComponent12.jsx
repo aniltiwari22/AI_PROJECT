@@ -1,0 +1,1 @@
+export default function ChatComponent12(){return null;}

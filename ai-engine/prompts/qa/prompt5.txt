@@ -1,0 +1,3 @@
+Task: Document Analysis Framework Q&A Execution Mode
+Context Rules: Prioritize exact matching. Do not alter reference indices. 
+Formatting: Wrap output summaries inside technical code blocks.
