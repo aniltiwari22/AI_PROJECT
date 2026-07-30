@@ -25,6 +25,7 @@ import Dashboard from './components/workspace/Dashboard';
 import { resolveInitialTheme, applyTheme } from './lib/theme';
 import ActivityPanel from './components/workspace/ActivityPanel';
 import SystemView from './components/workspace/SystemView';
+import VectorsView from './components/workspace/VectorsView';
 import useVoice from './hooks/useVoice';
 import VoiceControls, { VoiceStatus } from './components/voice/VoiceControls';
 
@@ -61,7 +62,8 @@ function saveConversation(messages) {
 const NAV = [
   { id: 'chat', label: 'Chat', Icon: FiTerminal },
   { id: 'health', label: 'Health', Icon: FiHeart },
-  { id: 'analytics', label: 'Benchmark', Icon: FiBarChart2 }
+  { id: 'analytics', label: 'Benchmark', Icon: FiBarChart2 },
+  { id: 'vectors', label: 'Vectors & RAG', Icon: FiLayers }
 ];
 
 const STATUS = {
@@ -713,7 +715,7 @@ function Workspace({ onSignOut }) {
               </span>
               <span className="text-sm font-semibold tracking-tight">Ashu Codex</span>
               <span className="rounded-md border border-accent/30 bg-accent/10 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-accent">
-                v2.0
+                v2.2
               </span>
             </div>
             <button
@@ -873,7 +875,9 @@ function Workspace({ onSignOut }) {
 
         <div className="relative min-h-0 flex-1">
           <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto">
-            {view !== 'chat' ? (
+            {view === 'vectors' ? (
+              <VectorsView />
+            ) : view !== 'chat' ? (
               <SystemView tab={view} />
             ) : hasConversation ? (
               <div className="space-y-7 px-4 py-8">

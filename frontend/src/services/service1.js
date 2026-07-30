@@ -520,3 +520,36 @@ export async function fetchModelInventory() {
     return [];
   }
 }
+
+export async function explainRetrieval(query, topK = 8) {
+  try {
+    const r = await apiFetch(`${API_BASE}/knowledge/explain`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, topK })
+    });
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok || !b.success) throw new Error(b.error || `Failed (${r.status})`);
+    return b;
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+
+export async function fetchKnowledge() {
+  try {
+    const r = await apiFetch(`${API_BASE}/knowledge`);
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteDocument(id) {
+  try {
+    const r = await apiFetch(`${API_BASE}/knowledge/${id}`, { method: 'DELETE' });
+    return (await r.json().catch(() => ({}))).success === true;
+  } catch {
+    return false;
+  }
+}

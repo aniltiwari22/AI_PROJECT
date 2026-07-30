@@ -194,6 +194,38 @@ function fuse(lists, topK) {
     .map(([id, rrf]) => ({ ...seen.get(id), rrf: Number(rrf.toFixed(5)) }));
 }
 
+/**
+ * Scores a fused result on the strongest evidence either retriever produced.
+ *
+ * Keeping the cosine alone was wrong, and the explain view showed it
+ * immediately: asking for `timingSafeEqual` put passwords.js first — found by
+ * keywords, correctly — with a cosine of 0.46, under the 0.58 threshold. The
+ * right chunk was retrieved, ranked first, and then thrown away.
+ *
+ * A cosine is meaningless for a chunk the vector index did not surface. Both
+ * cosine and the lexical hit-ratio run 0..1, so the larger of the two is the
+ * honest answer to "how sure are we this chunk is relevant".
+ *
+ * Agreement is itself evidence, so a chunk both retrievers found gets a small
+ * bump — capped, so it can never manufacture confidence out of two weak
+ * signals.
+ */
+const AGREEMENT_BONUS = Number(process.env.RETRIEVAL_AGREEMENT_BONUS || 0.05);
+
+function scoreFused(fused, tokens) {
+  for (const match of fused) {
+    const cosine = typeof match.score === 'number' ? match.score : 0;
+    const lexical = lexicalScore(tokens, match.text);
+
+    let score = Math.max(cosine, lexical);
+    if (match.retrievers?.length > 1) score = Math.min(1, score + AGREEMENT_BONUS);
+
+    match.score = Number(score.toFixed(4));
+    match.evidence = { cosine: Number(cosine.toFixed(4)), lexical: Number(lexical.toFixed(4)) };
+    delete match.retriever;
+  }
+}
+
 function vectorCandidates(queryVector) {
   const rows = sqlite
     .stmt(`SELECT id, doc_id AS docId, title, source, text, embedding,
@@ -259,13 +291,7 @@ async function search(query, topK = 4) {
       }
 
       const fused = fuse([vectors, keywords], topK);
-
-      // A chunk only the keyword index found has no cosine score. Score it the
-      // way the lexical path always did, so every match is comparable.
-      for (const match of fused) {
-        if (typeof match.score !== 'number') match.score = lexicalScore(tokens, match.text);
-        delete match.retriever;
-      }
+      scoreFused(fused, tokens);
 
       return { matches: fused, mode: 'hybrid' };
     }
@@ -297,6 +323,70 @@ async function search(query, topK = 4) {
   }));
 
   return { matches, mode: 'lexical' };
+}
+
+/**
+ * The same retrieval, with the working shown.
+ *
+ * search() returns only the fused result, which makes a bad answer hard to
+ * diagnose: you cannot tell whether the right chunk was never retrieved, or was
+ * retrieved and then ranked below something else. This returns each retriever's
+ * list separately alongside the fusion, so the failure is visible.
+ */
+async function explain(query, topK = 8) {
+  const { n } = sqlite.stmt('SELECT COUNT(*) AS n FROM chunks').get();
+  if (!n) return { empty: true, reason: 'Nothing is indexed yet' };
+
+  const started = Date.now();
+  const queryVector = await generateEmbedding(query);
+  const embedMs = Date.now() - started;
+  const tokens = tokenize(query);
+
+  const vectors = queryVector ? vectorCandidates(queryVector) : [];
+  const keywords = keywordCandidates(tokens);
+
+  const strip = (list) => list.slice(0, topK).map((m, i) => ({
+    rank: i + 1,
+    id: m.id,
+    title: m.title,
+    startLine: m.startLine,
+    endLine: m.endLine,
+    score: typeof m.score === 'number' ? Number(m.score.toFixed(4)) : null,
+    preview: String(m.text).replace(/\s+/g, ' ').slice(0, 160)
+  }));
+
+  const fused = vectors.length && keywords.length ? fuse([vectors, keywords], topK) : [];
+  scoreFused(fused, tokens);
+
+  const threshold = Number(process.env.RELEVANCE_THRESHOLD_HYBRID || 0.58);
+
+  return {
+    query,
+    tokens,
+    embeddings: { available: Boolean(queryVector), ms: embedMs, dimensions: queryVector?.length || 0 },
+    totalChunks: n,
+    vector: strip(vectors),
+    keyword: strip(keywords),
+    fused: fused.map((m, i) => ({
+      rank: i + 1,
+      id: m.id,
+      title: m.title,
+      startLine: m.startLine,
+      endLine: m.endLine,
+      score: Number(m.score.toFixed(4)),
+      rrf: m.rrf,
+      retrievers: m.retrievers,
+      evidence: m.evidence,
+      preview: String(m.text).replace(/\s+/g, ' ').slice(0, 160)
+    })),
+    threshold,
+    // What the orchestrator would actually decide with this result.
+    verdict: fused.length
+      ? (fused[0].score >= threshold
+          ? `would answer from the knowledge base (${fused[0].score.toFixed(2)} ≥ ${threshold})`
+          : `would escalate past the knowledge base (${fused[0].score.toFixed(2)} < ${threshold})`)
+      : 'nothing retrieved'
+  };
 }
 
 /**
@@ -375,6 +465,7 @@ module.exports = {
   listDocuments,
   deleteDocument,
   search,
+  explain,
   expandContext,
   stats,
   // exported for tests

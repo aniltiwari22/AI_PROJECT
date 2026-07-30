@@ -50,6 +50,21 @@ router.post('/search', async (req, res, next) => {
   }
 });
 
+// POST /api/v1/knowledge/explain — retrieval with the working shown, so a bad
+// answer can be traced to "never retrieved" or "retrieved but outranked".
+router.post('/explain', async (req, res, next) => {
+  try {
+    const { query, topK } = req.body || {};
+    if (typeof query !== 'string' || !query.trim()) {
+      return res.status(400).json({ success: false, error: 'query must be a non-empty string' });
+    }
+    const limit = Math.min(Math.max(Number(topK) || 8, 1), 25);
+    res.json({ success: true, ...(await vectorStore.explain(query.trim(), limit)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // --- repository indexing ---------------------------------------------------
 // Read-only: these walk and read a folder, and never write to it.
 
