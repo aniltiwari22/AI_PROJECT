@@ -2,12 +2,174 @@
 @tailwind components;
 @tailwind utilities;
 
-html,
-body,
-#root {
-  min-height: 100%;
+/*
+ * Warm-glass theme. Every colour is an HSL triplet in a CSS variable so both
+ * themes share one set of semantic names (surface / accent / muted …) and
+ * components never hardcode a palette.
+ */
+@layer base {
+  /*
+   * Near-neutral base with one accent hue. The previous palette tinted the
+   * background the same purple as the accent, so nothing stood out and the
+   * whole UI read as muddy. Surfaces are now essentially greyscale (a trace
+   * of warmth, ~6% saturation) and colour is reserved for things that matter.
+   */
+  :root,
+  [data-theme='dark'] {
+    /* #0B0F19 deep black / #111827 dark navy, as HSL triplets. */
+    --bg: 222 40% 7%;
+    --bg-elevated: 221 39% 11%;
+    --surface: 220 33% 14%;
+    --surface-strong: 219 30% 19%;
+    --border: 220 25% 22%;
+    --border-strong: 220 20% 34%;
+
+    --text: 220 20% 97%;
+    --text-muted: 218 14% 70%;
+    --text-faint: 218 12% 50%;
+
+    /* #8B5CF6 purple, #3B82F6 blue, #10B981 emerald. */
+    --accent: 258 90% 66%;
+    --accent-strong: 217 91% 60%;
+    --accent-contrast: 222 45% 6%;
+    --warm: 38 92% 58%;
+    --success: 160 84% 39%;
+    --danger: 0 72% 62%;
+
+    --glass: 221 39% 12% / 0.68;
+    --glow: 258 90% 62% / 0.22;
+    color-scheme: dark;
+  }
+
+  [data-theme='light'] {
+    --bg: 240 20% 99%;
+    --bg-elevated: 0 0% 100%;
+    --surface: 240 14% 96%;
+    --surface-strong: 240 12% 92%;
+    --border: 240 10% 88%;
+    --border-strong: 240 8% 76%;
+
+    --text: 240 14% 12%;
+    --text-muted: 240 6% 40%;
+    --text-faint: 240 5% 55%;
+
+    --accent: 258 80% 58%;
+    --accent-strong: 217 88% 52%;
+    --accent-contrast: 0 0% 100%;
+    --warm: 32 90% 46%;
+    --success: 160 78% 30%;
+    --danger: 0 68% 48%;
+
+    --glass: 0 0% 100% / 0.78;
+    --glow: 258 78% 58% / 0.12;
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: hsl(var(--bg));
+    color: hsl(var(--text));
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Theme swap should feel like a dim, not a flash. */
+  body,
+  body * {
+    transition:
+      background-color 0.25s ease,
+      border-color 0.25s ease,
+      color 0.2s ease;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border-strong)) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border-strong));
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--accent) / 0.55);
+    background-clip: content-box;
+  }
+
+  ::selection {
+    background-color: hsl(var(--accent) / 0.28);
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--accent) / 0.7);
+    outline-offset: 2px;
+  }
 }
 
-body {
-  margin: 0;
+@layer utilities {
+  /* Frosted panel — the core of the look. */
+  .glass {
+    background-color: hsl(var(--glass));
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+  }
+
+  /*
+   * A whisper of colour at the edges only. The earlier version washed the
+   * whole viewport in purple, which is what made every surface look tinted
+   * and muddy. Kept far from the reading column and very low opacity.
+   */
+  .aurora::before {
+    content: '';
+    position: fixed;
+    inset: -20%;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(30rem 24rem at 0% 0%, hsl(var(--accent) / 0.10), transparent 55%),
+      radial-gradient(28rem 22rem at 100% 100%, hsl(var(--warm) / 0.07), transparent 55%);
+    filter: blur(40px);
+    animation: drift 34s ease-in-out infinite alternate;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .ring-glow {
+    box-shadow: 0 0 0 1px hsl(var(--accent) / 0.3), 0 8px 32px -8px hsl(var(--glow));
+  }
+}
+
+@keyframes drift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(2%, -2%, 0) scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora::before {
+    animation: none;
+  }
+  body,
+  body * {
+    transition: none !important;
+  }
 }

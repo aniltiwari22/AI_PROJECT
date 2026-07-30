@@ -1,1 +1,0 @@
-export default function ChatComponent7(){return null;}
