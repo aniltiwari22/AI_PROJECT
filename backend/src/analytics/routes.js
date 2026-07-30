@@ -3,6 +3,7 @@ const excelLogger = require('../logging/excelLogger');
 const voiceLogger = require('../logging/voiceLogger');
 const sqlite = require('../storage/sqlite');
 const { systemMetrics } = require('./system');
+const { storageBreakdown, modelInventory } = require('./storage');
 
 const router = express.Router();
 
@@ -112,6 +113,24 @@ router.get('/', async (req, res, next) => {
 // above because it is polled every few seconds and must stay cheap.
 router.get('/system', (req, res) => {
   res.json({ success: true, ...systemMetrics() });
+});
+
+// Where disk actually goes. Cached — walking the model directory is real I/O.
+router.get('/storage', async (req, res, next) => {
+  try {
+    res.json({ success: true, ...(await storageBreakdown()) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Installed models with their real sizes and which are resident right now.
+router.get('/models', async (req, res, next) => {
+  try {
+    res.json({ success: true, models: await modelInventory() });
+  } catch (error) {
+    next(error);
+  }
 });
 
 /**

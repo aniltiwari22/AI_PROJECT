@@ -423,3 +423,100 @@ export async function submitPromptToEngine(promptText, history = [], fileIds = [
     };
   }
 }
+
+// --- conversations ----------------------------------------------------------
+
+export async function fetchConversations() {
+  try {
+    const r = await apiFetch(`${API_BASE}/conversations`);
+    const b = await r.json().catch(() => ({}));
+    return Array.isArray(b.conversations) ? b.conversations : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchConversation(id) {
+  try {
+    const r = await apiFetch(`${API_BASE}/conversations/${id}`);
+    const b = await r.json().catch(() => ({}));
+    return b.conversation || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function createConversation(title) {
+  try {
+    const r = await apiFetch(`${API_BASE}/conversations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title })
+    });
+    const b = await r.json().catch(() => ({}));
+    return b.conversation || null;
+  } catch {
+    return null;
+  }
+}
+
+// Fire-and-forget: persisting a turn must never delay showing it.
+export function appendMessage(conversationId, message) {
+  if (!conversationId) return;
+  apiFetch(`${API_BASE}/conversations/${conversationId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(message)
+  }).catch(() => {});
+}
+
+export async function updateConversation(id, patch) {
+  try {
+    const r = await apiFetch(`${API_BASE}/conversations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
+    });
+    return (await r.json().catch(() => ({}))).success === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteConversation(id) {
+  try {
+    const r = await apiFetch(`${API_BASE}/conversations/${id}`, { method: 'DELETE' });
+    return (await r.json().catch(() => ({}))).success === true;
+  } catch {
+    return false;
+  }
+}
+
+export async function searchConversations(query) {
+  try {
+    const r = await apiFetch(`${API_BASE}/conversations/search?q=${encodeURIComponent(query)}`);
+    const b = await r.json().catch(() => ({}));
+    return Array.isArray(b.results) ? b.results : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchStorage() {
+  try {
+    const r = await apiFetch(`${API_BASE}/analytics/storage`);
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchModelInventory() {
+  try {
+    const r = await apiFetch(`${API_BASE}/analytics/models`);
+    const b = await r.json().catch(() => ({}));
+    return Array.isArray(b.models) ? b.models : [];
+  } catch {
+    return [];
+  }
+}

@@ -20,6 +20,13 @@ const os = require('os');
  * So the module samples itself on a fixed interval and readers get the last
  * computed value. The number no longer depends on who asks, or how often.
  */
+/**
+ * A short rolling window so the dashboard can draw a line rather than a single
+ * number. Kept in memory: it is a live view, not something worth persisting.
+ */
+const HISTORY_POINTS = 60;
+const history = { cpu: [], memory: [] };
+
 const SAMPLE_MS = 2000;
 let previous = null;
 let lastPercent = null;
@@ -49,6 +56,7 @@ function sample() {
   }
 
   previous = now;
+  record();
 }
 
 sample();
@@ -73,12 +81,20 @@ function memory() {
   };
 }
 
+function record() {
+  const m = memory();
+  history.cpu.push(lastPercent);
+  history.memory.push(m.percent);
+  if (history.cpu.length > HISTORY_POINTS) history.cpu.shift();
+  if (history.memory.length > HISTORY_POINTS) history.memory.shift();
+}
+
 function systemMetrics() {
   const cpu = cpuUsagePercent();
 
   return {
-    cpu: { percent: cpu.percent, cores: cpu.cores },
-    memory: memory(),
+    cpu: { percent: cpu.percent, cores: cpu.cores, history: [...history.cpu] },
+    memory: { ...memory(), history: [...history.memory] },
     // Explicit, so the UI can say "CPU only" instead of leaving a blank card
     // that looks like a failed reading.
     gpu: { available: false, reason: 'No discrete GPU — Ollama runs on the CPU' },

@@ -10,6 +10,7 @@ const knowledgeRoutes = require('./knowledge/routes');
 const fileRoutes = require('./files/routes');
 const analyticsRoutes = require('./analytics/routes');
 const voiceRoutes = require('./voice/routes');
+const conversationRoutes = require('./conversations/routes');
 const { checkDatabase } = require('./config/db');
 const { checkOllama, visionStatus } = require('./config/ollama');
 const { getTelegramStatus } = require('./services/telegramBot');
@@ -94,6 +95,7 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/knowledge', knowledgeRoutes);
 app.use('/api/v1/files', fileRoutes);
 app.use('/api/v1/analytics', analyticsRoutes);
+app.use('/api/v1/conversations', conversationRoutes);
 app.use('/api/v2/voice', voiceRoutes);
 
 // Unauthenticated liveness only — says nothing about the machine. Monitoring

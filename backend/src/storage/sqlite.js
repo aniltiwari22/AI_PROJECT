@@ -28,6 +28,49 @@ CREATE TABLE IF NOT EXISTS chat_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_logs_created ON chat_logs(created_at);
 
+/* Threads the UI can switch between. chat_logs stays as it is — that is an
+   append-only audit of every request, including Telegram and voice, and is not
+   the same thing as a browsable conversation. */
+CREATE TABLE IF NOT EXISTS conversations (
+  id         TEXT PRIMARY KEY,
+  title      TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  pinned     INTEGER NOT NULL DEFAULT 0,
+  archived   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role            TEXT NOT NULL,
+  text            TEXT NOT NULL,
+  origin          TEXT,
+  confidence      REAL,
+  sources         TEXT,
+  telemetry       TEXT,
+  total_ms        INTEGER,
+  file_ids        TEXT,
+  created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, id);
+
+/* Searching your own history is the point of keeping it. */
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
+  USING fts5(text, content='messages', content_rowid='id');
+
+CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.id, old.text);
+  INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+END;
+
 CREATE TABLE IF NOT EXISTS files (
   id         TEXT PRIMARY KEY,
   filename   TEXT NOT NULL,

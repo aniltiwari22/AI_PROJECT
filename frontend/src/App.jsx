@@ -9,8 +9,13 @@ import {
   submitPromptToEngine, fetchEngineHealth, uploadFile, createVoiceSession, logVoiceTurn,
   fetchModels, fetchSystem, fetchRecentFiles,
   fetchRepos, previewRepo, indexRepo, removeRepo,
-  login, logout, hasToken, setUnauthenticatedHandler
+  login, logout, hasToken, setUnauthenticatedHandler,
+  fetchConversations, fetchConversation, createConversation, appendMessage,
+  updateConversation, deleteConversation, searchConversations,
+  fetchStorage, fetchModelInventory
 } from './services/service1';
+import ConversationList from './components/workspace/ConversationList';
+import { SystemOverview, ModelsLoaded, StorageBreakdown } from './components/workspace/SystemPanels';
 import LoginScreen from './components/auth/LoginScreen';
 import ContextRail from './components/workspace/ContextRail';
 import ModelPicker from './components/workspace/ModelPicker';
@@ -150,6 +155,11 @@ function Workspace({ onSignOut }) {
   const [repoPreview, setRepoPreview] = useState(null);
   const [repoProgress, setRepoProgress] = useState(null);
   const [indexing, setIndexing] = useState(false);
+  const [conversations, setConversations] = useState([]);
+  const [activeConversationId, setActiveConversationId] = useState(null);
+  const [conversationSearch, setConversationSearch] = useState([]);
+  const [storage, setStorage] = useState(null);
+  const [modelInventory, setModelInventory] = useState([]);
 
   const scrollRef = useRef(null);
   const chatEndRef = useRef(null);
@@ -166,6 +176,9 @@ function Workspace({ onSignOut }) {
   const languageRef = useRef(language);
   const autoSpeakRef = useRef(autoSpeak);
   const modelRef = useRef(model);
+  // runPrompt has an empty dependency array; without a ref it would persist
+  // every turn into whichever thread was open when the app first rendered.
+  const conversationRef = useRef(null);
 
   const uploading = attachments.some((a) => a.status === 'uploading');
   const hasConversation = messages.some((m) => m.role !== 'system');
@@ -260,6 +273,82 @@ function Workspace({ onSignOut }) {
   const handleRepoRemove = useCallback(async (root) => {
     await removeRepo(root);
     setRepos(await fetchRepos());
+  }, []);
+
+
+  // --- conversations --------------------------------------------------------
+
+  const refreshConversations = useCallback(async () => {
+    setConversations(await fetchConversations());
+  }, []);
+
+  useEffect(() => { refreshConversations(); }, [refreshConversations]);
+
+  useEffect(() => { conversationRef.current = activeConversationId; }, [activeConversationId]);
+
+  const openConversation = useCallback(async (id) => {
+    const conversation = await fetchConversation(id);
+    if (!conversation) return;
+
+    setActiveConversationId(id);
+    setMessages(conversation.messages.length ? conversation.messages : [WELCOME]);
+    setSteps([]);
+    setRunMeta(null);
+    setAtBottom(true);
+    // Switching threads must not leave the previous one still generating.
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsTyping(false);
+    voiceRef.current?.shutUp();
+  }, []);
+
+  const startConversation = useCallback(async () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsTyping(false);
+    setMessages([WELCOME]);
+    setInput('');
+    setStage('');
+    setAttachments([]);
+    setSteps([]);
+    setRunMeta(null);
+    setActiveConversationId(null);
+    voiceRef.current?.shutUp();
+    voiceSessionRef.current = null;
+    textareaRef.current?.focus();
+  }, []);
+
+  const handleRenameConversation = useCallback(async (id, title) => {
+    await updateConversation(id, { title });
+    refreshConversations();
+  }, [refreshConversations]);
+
+  const handleTogglePin = useCallback(async (id, pinned) => {
+    await updateConversation(id, { pinned });
+    refreshConversations();
+  }, [refreshConversations]);
+
+  const handleDeleteConversation = useCallback(async (id) => {
+    await deleteConversation(id);
+    if (conversationRef.current === id) startConversation();
+    refreshConversations();
+  }, [refreshConversations, startConversation]);
+
+  const handleConversationSearch = useCallback(async (query) => {
+    if (query.trim().length < 2) return setConversationSearch([]);
+    setConversationSearch(await searchConversations(query));
+  }, []);
+
+  // Dashboard panels. Polled slowly — storage walks the model directory.
+  useEffect(() => {
+    let active = true;
+    const load = () => {
+      fetchStorage().then((s) => { if (active) setStorage(s); });
+      fetchModelInventory().then((m) => { if (active) setModelInventory(m); });
+    };
+    load();
+    const id = setInterval(load, 60000);
+    return () => { active = false; clearInterval(id); };
   }, []);
 
   // Machine metrics for the top bar. The first CPU reading is null by design —
@@ -380,6 +469,23 @@ function Workspace({ onSignOut }) {
 
   const runPrompt = useCallback(async (promptText, base, fileIds = [], restoreAttachments) => {
     setIsTyping(true);
+
+    // A thread is created on the first question, not by the New button — an
+    // empty thread in the sidebar is noise.
+    let conversationId = conversationRef.current;
+    if (!conversationId) {
+      const created = await createConversation(promptText);
+      if (created) {
+        conversationId = created.id;
+        conversationRef.current = created.id;
+        setActiveConversationId(created.id);
+      }
+    }
+    if (conversationId) {
+      appendMessage(conversationId, { role: 'user', text: promptText, fileIds });
+      refreshConversations();
+    }
+
     setAtBottom(true);
     setSteps([]);
     setRunMeta(null);
@@ -452,6 +558,19 @@ function Workspace({ onSignOut }) {
       // Flush any trailing text the sentence-splitter has not spoken yet;
       // earlier sentences were already spoken as they streamed in.
       if (result.success && result.data) voiceRef.current?.endStream(result.data);
+    }
+
+    if (conversationId) {
+      appendMessage(conversationId, {
+        role: result.success ? 'assistant' : 'error',
+        text: result.success ? result.data : result.error,
+        origin: result.origin,
+        confidence: result.confidence,
+        sources: result.sources,
+        telemetry: result.telemetry,
+        totalMs: result.totalMs
+      });
+      refreshConversations();
     }
 
     // Log voice-originated turns to VoiceLogs.xlsx. Only voice turns — a typed
@@ -586,8 +705,8 @@ function Workspace({ onSignOut }) {
           navOpen ? 'visible translate-x-0' : 'invisible -translate-x-full'
         }`}
       >
-        <div>
-          <div className="mb-6 flex items-center justify-between px-1 py-1.5">
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="mb-6 flex shrink-0 items-center justify-between px-1 py-1.5">
             <div className="flex items-center gap-2.5">
               <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-warm shadow-soft">
                 <span className="font-mono text-sm font-bold text-accent-contrast">A</span>
@@ -607,15 +726,7 @@ function Workspace({ onSignOut }) {
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={handleClear}
-            className="mb-5 flex w-full items-center gap-2 rounded-xl bg-gradient-to-r from-accent to-accent-strong px-3 py-2.5 text-xs font-semibold text-accent-contrast shadow-soft transition hover:opacity-90"
-          >
-            <FiPlus /> New conversation
-          </button>
-
-          <nav className="space-y-0.5">
+          <nav className="mb-3 space-y-0.5">
             {NAV.map(({ id, label, Icon }) => (
               <button
                 key={id}
@@ -642,9 +753,25 @@ function Workspace({ onSignOut }) {
               <span className="ml-auto rounded-md bg-surface px-1.5 py-0.5 text-[9px] uppercase tracking-wide">Soon</span>
             </button>
           </nav>
+
+          {/* Takes the remaining height and scrolls on its own, so the status
+              controls below stay pinned. */}
+          {view === 'chat' && (
+            <ConversationList
+              conversations={conversations}
+              activeId={activeConversationId}
+              onSelect={(id) => { openConversation(id); setNavOpen(false); }}
+              onCreate={() => { startConversation(); setNavOpen(false); }}
+              onRename={handleRenameConversation}
+              onDelete={handleDeleteConversation}
+              onTogglePin={handleTogglePin}
+              searchResults={conversationSearch}
+              onSearch={handleConversationSearch}
+            />
+          )}
         </div>
 
-        <div className="space-y-3 border-t border-line pt-3">
+        <div className="shrink-0 space-y-3 border-t border-line pt-3">
           <div className="flex items-center justify-between px-1">
             <StatusPill status={health} detail={healthDetail} />
             <button
@@ -867,7 +994,7 @@ function Workspace({ onSignOut }) {
 
           {/* Inspector: hidden on narrow screens where the chat needs the width. */}
           {inspectorOpen && (
-            <aside className="hidden w-64 shrink-0 border-l border-line xl:block">
+            <aside className="hidden w-64 shrink-0 overflow-y-auto border-l border-line xl:block">
               <ActivityPanel
                 steps={steps}
                 totalMs={runMeta?.totalMs}
@@ -875,6 +1002,12 @@ function Workspace({ onSignOut }) {
                 confidence={runMeta?.confidence}
                 live={isTyping}
               />
+
+              <div className="space-y-4 border-t border-line p-3">
+                <SystemOverview system={system} />
+                <ModelsLoaded models={modelInventory} />
+                <StorageBreakdown storage={storage} />
+              </div>
             </aside>
           )}
         </div>
