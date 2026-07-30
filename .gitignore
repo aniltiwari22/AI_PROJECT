@@ -18,3 +18,5 @@ logs/
 *.bak
 *.tmp
 *.corrupt-*
+# Snapshots taken before the SQLite migration — real conversation data.
+*.pre-sqlite
