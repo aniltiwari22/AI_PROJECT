@@ -1,0 +1,55 @@
+# Caddy gets a Let's Encrypt certificate automatically — just point a domain at
+# the server's IP and replace the hostname below. HTTPS matters here: the
+# session token travels in the Authorization header, and over plain HTTP anyone
+# on the path can read it and reuse it.
+#
+#   sudo cp Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+
+your.domain {
+	encode zstd gzip
+
+	# The API and the streaming endpoints.
+	handle /api/* {
+		reverse_proxy 127.0.0.1:5000 {
+			# Chat and repo indexing stream NDJSON for minutes at a time.
+			# Without this Caddy buffers the whole response and the progress
+			# the UI depends on never arrives until the end.
+			flush_interval -1
+			# A CPU-only 7B can take several minutes on a long prompt.
+			transport http {
+				read_timeout 900s
+				write_timeout 900s
+			}
+		}
+	}
+
+	handle /health {
+		reverse_proxy 127.0.0.1:5000
+	}
+
+	handle /ping {
+		reverse_proxy 127.0.0.1:5000
+	}
+
+	# Everything else is the built frontend.
+	handle {
+		root * /home/ubuntu/AI_PROJECT/frontend/dist
+		try_files {path} /index.html
+		file_server
+	}
+
+	# The app never embeds third-party content and never renders model output
+	# as HTML, so these cost nothing and close off a class of attacks.
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/ashu.log
+		format json
+	}
+}

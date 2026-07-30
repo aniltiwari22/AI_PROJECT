@@ -1,0 +1,43 @@
+[Unit]
+Description=Ashu Codex AI backend
+Documentation=https://github.com/aniltiwari22/AI_PROJECT
+# Ollama must be up first: the backend warms the model on boot and would
+# otherwise log a connection failure on every restart.
+After=network-online.target ollama.service
+Wants=network-online.target ollama.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/AI_PROJECT/backend
+ExecStart=/usr/bin/node src/server.js
+
+Restart=always
+RestartSec=5
+# Ten restarts in five minutes means it is crash-looping, not recovering.
+StartLimitBurst=10
+StartLimitIntervalSec=300
+
+# --- hardening -------------------------------------------------------------
+# The process reads and writes only its own storage/ and logs/ directories,
+# and reaches out to nothing except localhost Ollama and (optionally) Tavily.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The two directories it genuinely writes to.
+ReadWritePaths=/home/ubuntu/AI_PROJECT/storage /home/ubuntu/AI_PROJECT/logs
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+# Journal is the log. `journalctl -u ashu-backend -f` to follow.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ashu-backend
+
+[Install]
+WantedBy=multi-user.target
