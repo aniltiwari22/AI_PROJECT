@@ -1,67 +1,47 @@
-const fs = require('fs/promises');
-const path = require('path');
+const sqlite = require('../storage/sqlite');
 
-const PROJECT_ROOT = path.resolve(__dirname, '../../..');
-const DB_FILE = process.env.DB_FILE
-  ? path.resolve(PROJECT_ROOT, process.env.DB_FILE)
-  : path.resolve(PROJECT_ROOT, 'storage/database.json');
+/**
+ * Chat log persistence.
+ *
+ * Was a single JSON file rewritten in full on every insert — 136KB rewritten
+ * to append a 200-byte row, and before the write queue existed, 24 of 25
+ * concurrent inserts were silently lost. SQLite writes the row.
+ *
+ * The API stays async so nothing upstream changes, even though better-sqlite3
+ * is synchronous.
+ */
 
-const initialData = {
-  chat_logs: []
-};
+async function insertChatLog({ prompt, response }) {
+  const createdAt = new Date().toISOString();
 
-async function ensureDatabase() {
-  await fs.mkdir(path.dirname(DB_FILE), { recursive: true });
+  const result = sqlite
+    .stmt('INSERT INTO chat_logs (prompt, response, created_at) VALUES (?, ?, ?)')
+    .run(String(prompt ?? ''), String(response ?? ''), createdAt);
 
-  try {
-    await fs.access(DB_FILE);
-  } catch {
-    await fs.writeFile(DB_FILE, JSON.stringify(initialData, null, 2));
-  }
-}
-
-async function readDatabase() {
-  await ensureDatabase();
-  const raw = await fs.readFile(DB_FILE, 'utf8');
-  return raw.trim() ? JSON.parse(raw) : { ...initialData };
-}
-
-async function writeDatabase(data) {
-  await ensureDatabase();
-  await fs.writeFile(DB_FILE, JSON.stringify(data, null, 2));
+  return { id: result.lastInsertRowid, prompt, response, createdAt };
 }
 
 async function checkDatabase() {
-  const data = await readDatabase();
+  const { n } = sqlite.stmt('SELECT COUNT(*) AS n FROM chat_logs').get();
+
   return {
     connected: true,
-    file: DB_FILE,
-    chatLogCount: Array.isArray(data.chat_logs) ? data.chat_logs.length : 0
+    file: sqlite.DB_FILE,
+    engine: 'sqlite',
+    chatLogCount: n
   };
 }
 
-async function insertChatLog({ prompt, response }) {
-  const data = await readDatabase();
-
-  if (!Array.isArray(data.chat_logs)) {
-    data.chat_logs = [];
-  }
-
-  const record = {
-    id: Date.now(),
-    prompt,
-    response,
-    createdAt: new Date().toISOString()
-  };
-
-  data.chat_logs.push(record);
-  await writeDatabase(data);
-
-  return record;
+/** Most recent first. Used by the replay view and for ad-hoc inspection. */
+async function recentChatLogs(limit = 50) {
+  return sqlite
+    .stmt('SELECT id, prompt, response, created_at AS createdAt FROM chat_logs ORDER BY id DESC LIMIT ?')
+    .all(Math.max(1, Math.min(Number(limit) || 50, 500)));
 }
 
 module.exports = {
-  DB_FILE,
+  DB_FILE: sqlite.DB_FILE,
   checkDatabase,
-  insertChatLog
+  insertChatLog,
+  recentChatLogs
 };
