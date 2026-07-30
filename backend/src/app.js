@@ -45,14 +45,42 @@ const ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || 'http://localhost:5173,http:
   .map((o) => o.trim())
   .filter(Boolean);
 
-app.use(cors({
-  origin(origin, callback) {
-    // No Origin header: curl, a native app, or a same-origin request.
-    if (!origin) return callback(null, true);
-    if (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    return callback(new Error(`Origin ${origin} is not allowed`));
-  },
-  credentials: true
+/**
+ * Same-origin requests are always allowed, whatever the host happens to be.
+ *
+ * Browsers send an Origin header on same-origin POSTs too, not only on
+ * cross-origin ones. Matching solely against a configured list therefore
+ * rejected the app calling its own API — which is exactly what happens behind
+ * a tunnel or any hostname not known when CORS_ORIGIN was written. It also
+ * hid the problem from curl, which sends no Origin at all.
+ *
+ * Comparing the Origin to the request's own Host keeps that working without
+ * having to predict the hostname, and gives away nothing: a page on another
+ * origin cannot forge Host.
+ */
+function isSameOrigin(origin, req) {
+  if (!origin || !req.headers.host) return false;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+app.use(cors((req, callback) => {
+  const origin = req.headers.origin;
+
+  // No Origin header at all: curl, a native client, a server-to-server call.
+  if (!origin) return callback(null, { origin: true, credentials: true });
+
+  if (isSameOrigin(origin, req) || ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin)) {
+    return callback(null, { origin: true, credentials: true });
+  }
+
+  // Not an error — an error becomes a 500 and looks like the server is broken.
+  // Withholding the header is what CORS actually does: the request is served,
+  // and the browser refuses to let the other site read the response.
+  return callback(null, { origin: false });
 }));
 
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '30mb' }));
