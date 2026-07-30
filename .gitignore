@@ -2,3 +2,19 @@
 .env.local
 node_modules/
 dist/
+
+# Runtime data. These hold real conversations, uploaded documents and cached
+# answers — personal content that does not belong in the repository.
+storage/*.db
+storage/*.db-wal
+storage/*.db-shm
+storage/*.json
+storage/*.xlsx
+storage/uploads/*
+!storage/uploads/.gitkeep
+logs/
+
+# Recovery copies written by the JSON store and by manual backups.
+*.bak
+*.tmp
+*.corrupt-*
