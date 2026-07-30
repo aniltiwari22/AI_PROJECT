@@ -154,44 +154,125 @@ function toMatchQuery(tokens) {
 }
 
 /**
- * Returns the best-matching chunks with a normalised 0..1 relevance score.
- * `mode` tells the caller whether scores came from embeddings or keywords,
- * since the two are not directly comparable.
+ * Reciprocal Rank Fusion.
+ *
+ * Cosine similarity runs 0..1 and BM25 is negative and unbounded, so the two
+ * scores cannot be added or averaged. RRF ignores the scores entirely and uses
+ * only each result's *rank* in its own list, which makes them combinable
+ * without inventing a normalisation.
+ *
+ * k = 60 is the value from the original paper. It damps the difference between
+ * the first few ranks, so a chunk that both retrievers rank reasonably beats
+ * one that a single retriever ranks first.
+ */
+const RRF_K = Number(process.env.RETRIEVAL_RRF_K || 60);
+
+// How deep each retriever goes before fusing. Wider than topK on purpose: a
+// chunk ranked 8th by vectors and 3rd by keywords should be able to win.
+const FUSION_DEPTH = Number(process.env.RETRIEVAL_FUSION_DEPTH || 20);
+
+function fuse(lists, topK) {
+  const scores = new Map();
+  const seen = new Map();
+
+  for (const list of lists) {
+    list.forEach((item, index) => {
+      const key = item.id;
+      scores.set(key, (scores.get(key) || 0) + 1 / (RRF_K + index + 1));
+
+      // Keep the richest copy: the vector list carries a cosine score, the
+      // keyword list does not.
+      const existing = seen.get(key);
+      seen.set(key, existing ? { ...existing, ...item, retrievers: [...existing.retrievers, item.retriever] }
+                             : { ...item, retrievers: [item.retriever] });
+    });
+  }
+
+  return [...scores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topK)
+    .map(([id, rrf]) => ({ ...seen.get(id), rrf: Number(rrf.toFixed(5)) }));
+}
+
+function vectorCandidates(queryVector) {
+  const rows = sqlite
+    .stmt(`SELECT id, doc_id AS docId, title, source, text, embedding,
+                  start_line AS startLine, end_line AS endLine
+           FROM chunks WHERE embedding IS NOT NULL`)
+    .all();
+
+  return rows
+    .map((row) => ({
+      id: row.id,
+      docId: row.docId,
+      title: row.title,
+      source: row.source,
+      text: row.text,
+      startLine: row.startLine,
+      endLine: row.endLine,
+      score: cosineSimilarity(queryVector, sqlite.unpackEmbedding(row.embedding)),
+      retriever: 'vector'
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, FUSION_DEPTH);
+}
+
+function keywordCandidates(tokens) {
+  if (!tokens.length) return [];
+
+  return sqlite
+    .stmt(`SELECT c.id, c.doc_id AS docId, c.title, c.source, c.text,
+                  c.start_line AS startLine, c.end_line AS endLine
+           FROM chunks_fts JOIN chunks c ON c.rowid = chunks_fts.rowid
+           WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts) LIMIT ?`)
+    .all(toMatchQuery(tokens), FUSION_DEPTH)
+    .map((row) => ({ ...row, retriever: 'keyword' }));
+}
+
+/**
+ * Retrieval, using both indexes together.
+ *
+ * These used to be either/or: embeddings when available, keywords only as a
+ * fallback. That left each one's blind spot uncovered — embeddings recognise a
+ * paraphrase but miss a literal identifier like MUM-7741, and keywords do the
+ * reverse. Running both and fusing the ranks covers both.
+ *
+ * `score` stays on the cosine scale so retrievalPolicy's thresholds keep
+ * meaning what they meant; `rrf` is the ordering, exposed for inspection.
  */
 async function search(query, topK = 4) {
   const { n } = sqlite.stmt('SELECT COUNT(*) AS n FROM chunks').get();
   if (!n) return { matches: [], mode: 'empty' };
 
   const queryVector = await generateEmbedding(query);
+  const tokens = tokenize(query);
 
   if (queryVector) {
-    const rows = sqlite
-      .stmt(`SELECT id, doc_id AS docId, title, source, text, embedding,
-                    start_line AS startLine, end_line AS endLine
-             FROM chunks WHERE embedding IS NOT NULL`)
-      .all();
+    const vectors = vectorCandidates(queryVector);
+    const keywords = keywordCandidates(tokens);
 
-    if (rows.length) {
-      const scored = rows
-        .map((row) => ({
-          id: row.id,
-          docId: row.docId,
-          title: row.title,
-          source: row.source,
-          text: row.text,
-          startLine: row.startLine,
-          endLine: row.endLine,
-          score: cosineSimilarity(queryVector, sqlite.unpackEmbedding(row.embedding))
-        }))
-        .sort((a, b) => b.score - a.score);
+    if (vectors.length) {
+      // Nothing to fuse with — keyword search found nothing, or the query was
+      // all stop words. Vectors alone, on the same scale as before.
+      if (!keywords.length) {
+        return { matches: vectors.slice(0, topK), mode: 'embedding' };
+      }
 
-      return { matches: scored.slice(0, topK), mode: 'embedding' };
+      const fused = fuse([vectors, keywords], topK);
+
+      // A chunk only the keyword index found has no cosine score. Score it the
+      // way the lexical path always did, so every match is comparable.
+      for (const match of fused) {
+        if (typeof match.score !== 'number') match.score = lexicalScore(tokens, match.text);
+        delete match.retriever;
+      }
+
+      return { matches: fused, mode: 'hybrid' };
     }
   }
 
-  // Embeddings unavailable — fall back to SQLite's own full-text index rather
-  // than scoring every chunk in JavaScript.
-  const tokens = tokenize(query);
+  // Embeddings unavailable — SQLite's own index rather than scoring every
+  // chunk in JavaScript.
   if (!tokens.length) return { matches: [], mode: 'lexical' };
 
   const rows = sqlite
@@ -218,6 +299,65 @@ async function search(query, topK = 4) {
   return { matches, mode: 'lexical' };
 }
 
+/**
+ * Widens a match with the chunks either side of it in the same document.
+ *
+ * Retrieval finds the function that answers the question; the line that
+ * explains *why* is often in the one above, and the caller in the one below.
+ * Chunk ids are `${docId}_c${index}`, so neighbours are addressable directly.
+ *
+ * Bounded on purpose. Prompt evaluation is the expensive part of a request —
+ * measured at 15.8 tok/s — so this expands only the top match, by one chunk
+ * each side, and only while the total stays under budget.
+ */
+function expandContext(matches, { budgetChars = 3000, neighbours = 1 } = {}) {
+  if (!matches.length) return matches;
+
+  const [top, ...rest] = matches;
+  const parsed = /^(.*)_c(\d+)$/.exec(top.id || '');
+  if (!parsed) return matches;
+
+  const [, docId, indexText] = parsed;
+  const index = Number(indexText);
+
+  const wanted = [];
+  for (let offset = -neighbours; offset <= neighbours; offset += 1) {
+    if (offset === 0 || index + offset < 0) continue;
+    wanted.push(`${docId}_c${index + offset}`);
+  }
+  if (!wanted.length) return matches;
+
+  const holes = wanted.map(() => '?').join(',');
+  const siblings = sqlite
+    .stmt(`SELECT id, text, start_line AS startLine, end_line AS endLine
+           FROM chunks WHERE id IN (${holes}) ORDER BY id`)
+    .all(...wanted);
+
+  if (!siblings.length) return matches;
+
+  // Reassemble in document order so the excerpt still reads top to bottom.
+  const ordered = [...siblings, { id: top.id, text: top.text, startLine: top.startLine, endLine: top.endLine }]
+    .sort((a, b) => (a.startLine ?? 0) - (b.startLine ?? 0));
+
+  let used = 0;
+  const kept = [];
+  for (const piece of ordered) {
+    if (used + piece.text.length > budgetChars && kept.length) break;
+    kept.push(piece);
+    used += piece.text.length;
+  }
+
+  const expanded = {
+    ...top,
+    text: kept.map((p) => p.text).join('\n'),
+    startLine: kept[0].startLine ?? top.startLine,
+    endLine: kept[kept.length - 1].endLine ?? top.endLine,
+    expandedWith: kept.length - 1
+  };
+
+  return [expanded, ...rest];
+}
+
 async function stats() {
   const docs = sqlite.stmt('SELECT COUNT(*) AS n FROM documents').get().n;
   const chunks = sqlite.stmt('SELECT COUNT(*) AS n FROM chunks').get().n;
@@ -235,6 +375,7 @@ module.exports = {
   listDocuments,
   deleteDocument,
   search,
+  expandContext,
   stats,
   // exported for tests
   chunkText,

@@ -5,6 +5,10 @@
 // scoring mode gets its own threshold.
 const THRESHOLDS = {
   embedding: Number(process.env.RELEVANCE_THRESHOLD_EMBEDDING || 0.62),
+  // Hybrid results carry a cosine score, so they share the embedding scale.
+  // Slightly lower because fusion promotes chunks both retrievers liked, and
+  // one of those may have a middling cosine while still being the right answer.
+  hybrid: Number(process.env.RELEVANCE_THRESHOLD_HYBRID || 0.58),
   lexical: Number(process.env.RELEVANCE_THRESHOLD_LEXICAL || 0.5)
 };
 

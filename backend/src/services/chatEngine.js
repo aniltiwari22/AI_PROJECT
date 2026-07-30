@@ -373,7 +373,13 @@ async function processPrompt(prompt, history = [], fileIds = [], events = {}) {
 
   if (verdict.sufficient) {
     step('generate', 'Generating from knowledge base');
-    const answer = await ask(normalizedPrompt, history, formatInternal(internal.matches), emitToken, signal, box, model);
+    // Widen the best match with its neighbours before building the prompt —
+    // the answer is often split across a chunk boundary.
+    const widened = vectorStore.expandContext(internal.matches, {
+      budgetChars: Number(process.env.INTERNAL_CONTEXT_CHARS || 3000)
+    });
+
+    const answer = await ask(normalizedPrompt, history, formatInternal(widened), emitToken, signal, box, model);
 
     // The model may still reject the context as unhelpful; treat that as a miss.
     if (!looksUnknown(answer)) {
