@@ -8,7 +8,10 @@ const os = require('os');
 const NUM_THREAD = Number(process.env.OLLAMA_NUM_THREAD || 0) || undefined;
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3';
+// The fallback has to name a model that is actually installed. It used to say
+// 'llama3', which was then removed — so an unset OLLAMA_MODEL would have made
+// Ollama try to pull it over the network, hanging on an offline machine.
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5-coder:7b';
 
 // Models that cannot answer a chat turn. Offering them in the picker would let
 // the user select one and get an error or gibberish instead of an answer.
