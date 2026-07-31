@@ -12,7 +12,7 @@ import {
   login, logout, hasToken, setUnauthenticatedHandler,
   fetchConversations, fetchConversation, createConversation, appendMessage,
   updateConversation, deleteConversation, searchConversations,
-  fetchStorage, fetchModelInventory
+  fetchStorage, fetchModelInventory, fetchIndexStatus
 } from './services/service1';
 import ConversationList from './components/workspace/ConversationList';
 import { SystemOverview, ModelsLoaded, StorageBreakdown } from './components/workspace/SystemPanels';
@@ -410,7 +410,8 @@ function Workspace({ onSignOut }) {
               ? result.success
                 ? { ...a, status: 'ready', id: result.id, kind: result.kind, chars: result.chars,
                     pages: result.pages, truncated: result.truncated, warning: result.warning,
-                    elapsedMs: result.elapsedMs, optimised: result.optimised, preview: result.preview }
+                    elapsedMs: result.elapsedMs, optimised: result.optimised, preview: result.preview,
+                    indexing: Boolean(result.indexing) }
                 : { ...a, status: 'error', error: result.error }
               : a
           )
@@ -418,6 +419,31 @@ function Workspace({ onSignOut }) {
       })
     );
   }, []);
+
+  /*
+   * Uploads return as soon as the file is stored; embedding continues in the
+   * background. Poll only while something is actually indexing, and stop as
+   * soon as nothing is — an interval that runs forever for a flag nobody is
+   * looking at is just noise.
+   */
+  useEffect(() => {
+    const waiting = attachments.filter((a) => a.indexing && a.id);
+    if (!waiting.length) return undefined;
+
+    let active = true;
+    const id = setInterval(async () => {
+      for (const item of waiting) {
+        const job = await fetchIndexStatus(item.id);
+        if (!active) return;
+        // A cleared job means it finished and aged out.
+        if (!job || job.state === 'done' || job.state === 'failed') {
+          setAttachments((prev) => prev.map((a) => (a.id === item.id ? { ...a, indexing: false } : a)));
+        }
+      }
+    }, 3000);
+
+    return () => { active = false; clearInterval(id); };
+  }, [attachments]);
 
   const removeAttachment = useCallback((key) => {
     setAttachments((prev) => prev.filter((a) => a.key !== key));

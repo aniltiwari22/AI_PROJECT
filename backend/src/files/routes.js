@@ -1,7 +1,7 @@
 const express = require('express');
 const { extractContent } = require('./extract');
 const store = require('./store');
-const vectorStore = require('../knowledge/vectorStore');
+const indexQueue = require('./indexQueue');
 
 const router = express.Router();
 
@@ -56,19 +56,19 @@ router.post('/', async (req, res, next) => {
       bytes: buffer.length
     });
 
-    // Optionally make the document searchable for future questions too.
-    let knowledgeId = null;
+    /*
+     * Indexing runs after the response, not before it.
+     *
+     * Extraction and storage take about 240ms for a 40KB document; embedding it
+     * takes 17s. Awaiting both meant the upload appeared to take 17 seconds,
+     * when the file was actually ready in a quarter of one — and nothing in the
+     * pipeline needs the index to exist before the file can be attached to a
+     * question, because an attached file is read directly.
+     */
+    let indexing = false;
     if (addToKnowledge && extracted.text) {
-      try {
-        const saved = await vectorStore.addDocument({
-          title: filename,
-          source: `upload:${record.id}`,
-          text: extracted.text
-        });
-        knowledgeId = saved.id;
-      } catch (error) {
-        console.warn(`Could not add upload to knowledge base: ${error.message}`);
-      }
+      indexing = true;
+      indexQueue.add(record, extracted.text);
     }
 
     res.status(201).json({
@@ -81,7 +81,8 @@ router.post('/', async (req, res, next) => {
       truncated: record.truncated,
       warning: record.warning,
       preview: record.text.slice(0, 300),
-      knowledgeId
+      // The caller can poll /api/v1/files/:id/index for progress.
+      indexing
     });
   } catch (error) {
     next(error);
@@ -94,6 +95,12 @@ router.get('/', async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// GET /api/v1/files/:id/index — how the background indexing of an upload is
+// going. Returns null once the job has aged out, which means it finished.
+router.get('/:id/index', (req, res) => {
+  res.json({ success: true, job: indexQueue.status(req.params.id), pending: indexQueue.pending().length });
 });
 
 router.delete('/:id', async (req, res, next) => {

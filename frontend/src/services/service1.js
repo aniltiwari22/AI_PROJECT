@@ -553,3 +553,15 @@ export async function deleteDocument(id) {
     return false;
   }
 }
+
+// Background indexing progress for an upload. The upload itself returns as
+// soon as the file is stored; embedding continues after.
+export async function fetchIndexStatus(fileId) {
+  try {
+    const r = await apiFetch(`${API_BASE}/files/${fileId}/index`);
+    const b = await r.json().catch(() => ({}));
+    return b.job || null;
+  } catch {
+    return null;
+  }
+}

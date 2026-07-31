@@ -171,6 +171,32 @@ async function tryEmbed(model, text) {
   return vector;
 }
 
+/**
+ * Embeds many texts in one request.
+ *
+ * `/api/embed` takes an array; the older `/api/embeddings` takes one string, so
+ * a 44-chunk document meant 44 HTTP round trips. Measured over 20 chunks:
+ * 3007ms one at a time, 1893ms with Promise.all, 1402ms batched. The remaining
+ * cost is the model's forward passes, which nothing here can avoid.
+ *
+ * Falls back to one-at-a-time if the endpoint is missing, so an older Ollama
+ * keeps working.
+ */
+async function tryEmbedBatch(model, texts) {
+  const response = await ollamaClient.post('/api/embed', { model, input: texts });
+  const vectors = response.data?.embeddings;
+
+  if (!Array.isArray(vectors) || vectors.length !== texts.length) {
+    throw new Error('batch embedding returned the wrong shape');
+  }
+  // A partially-empty batch would silently store null vectors, so treat any
+  // missing row as a failure and let the caller fall back.
+  if (vectors.some((v) => !Array.isArray(v) || !v.length)) {
+    throw new Error('batch embedding returned an empty vector');
+  }
+  return vectors;
+}
+
 module.exports = {
   OLLAMA_BASE_URL,
   OLLAMA_MODEL,
@@ -237,6 +263,42 @@ module.exports = {
 
   // Returns null (never throws) when embeddings are unavailable, so retrieval
   // can silently degrade to keyword matching.
+  /**
+   * Embeds a list of texts, batching where the server supports it.
+   *
+   * Returns an array the same length as the input, with null where a vector
+   * could not be produced — callers store null rather than dropping the chunk,
+   * so it stays findable by keyword search.
+   */
+  async generateEmbeddings(texts) {
+    if (!Array.isArray(texts) || !texts.length) return [];
+    if (embedDisabled) return texts.map(() => null);
+
+    const model = embedModelInUse || OLLAMA_EMBED_MODEL;
+    const size = Number(process.env.EMBED_BATCH_SIZE || 32);
+    const out = [];
+
+    for (let i = 0; i < texts.length; i += size) {
+      const slice = texts.slice(i, i + size);
+      try {
+        const vectors = await tryEmbedBatch(model, slice);
+        if (embedModelInUse !== model) {
+          embedModelInUse = model;
+          console.log(`Embeddings using model "${model}" (batched).`);
+        }
+        out.push(...vectors);
+      } catch {
+        // Older Ollama, or a batch the server refused. One at a time still
+        // works, and generateEmbedding handles model discovery and disabling.
+        for (const text of slice) {
+          out.push(await module.exports.generateEmbedding(text));
+        }
+      }
+    }
+
+    return out;
+  },
+
   async generateEmbedding(text) {
     if (embedDisabled) return null;
 

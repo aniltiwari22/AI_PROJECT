@@ -35,6 +35,10 @@ function detailFor(item) {
   }
   if (item.status === 'error') return item.error;
 
+  // The file is usable the moment it is stored; indexing continues behind it,
+  // and saying so is better than a progress bar that appears to stall.
+  if (item.indexing) return 'ready · indexing for later questions…';
+
   const bits = [];
   if (item.chars) bits.push(`~${estimateTokens(item.chars).toLocaleString()} tok`);
   if (item.pages) bits.push(`${item.pages}p`);
