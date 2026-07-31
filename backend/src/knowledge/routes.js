@@ -1,6 +1,7 @@
 const express = require('express');
 const vectorStore = require('./vectorStore');
 const repoIndexer = require('./repoIndexer');
+const excelStore = require('./excelStore');
 
 const router = express.Router();
 
@@ -60,6 +61,37 @@ router.post('/explain', async (req, res, next) => {
     }
     const limit = Math.min(Math.max(Number(topK) || 8, 1), 25);
     res.json({ success: true, ...(await vectorStore.explain(query.trim(), limit)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// --- curated answers ------------------------------------------------------
+
+// GET /api/v1/knowledge/sheets — what can be saved into, and the shape of each.
+router.get('/sheets', (req, res) => {
+  res.json({
+    success: true,
+    sheets: excelStore.SHEETS.map((s) => ({ name: s.name, columns: s.columns, keys: s.keys }))
+  });
+});
+
+/**
+ * POST /api/v1/knowledge/curate — promote an answer into the workbook.
+ *
+ * A curated row is answered with no model call at all, which on this hardware
+ * is the difference between instant and ~42 seconds.
+ */
+router.post('/curate', async (req, res, next) => {
+  try {
+    const { sheet, values } = req.body || {};
+    if (typeof sheet !== 'string' || !sheet.trim()) {
+      return res.status(400).json({ success: false, error: 'sheet is required' });
+    }
+    if (!values || typeof values !== 'object' || Array.isArray(values)) {
+      return res.status(400).json({ success: false, error: 'values must be an object of column -> text' });
+    }
+    res.status(201).json({ success: true, ...(await excelStore.addRow(sheet.trim(), values)) });
   } catch (error) {
     next(error);
   }

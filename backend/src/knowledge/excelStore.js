@@ -207,4 +207,66 @@ async function stats() {
   }
 }
 
-module.exports = { search, formatAnswer, stats, ensureWorkbook, tokenize, identifiers, scoreRow, WORKBOOK, SHEETS };
+/**
+ * Adds a row to a sheet.
+ *
+ * The workbook was the fastest source in the pipeline and had zero rows in it,
+ * while the request log showed the same question reaching the model seven
+ * times at ~42s each. Curating an answer is the only way to make a question
+ * fast that does not involve buying hardware, and it was previously only
+ * possible by opening Excel by hand.
+ *
+ * Writes are serialised through one chain: ExcelJS reads the whole workbook,
+ * mutates it and writes it back, so two concurrent saves would lose one.
+ */
+let writeChain = Promise.resolve();
+
+async function addRow(sheetName, values) {
+  const sheet = SHEETS.find((s) => s.name === sheetName);
+  if (!sheet) {
+    const error = new Error(`Unknown sheet "${sheetName}". Use one of: ${SHEETS.map((s) => s.name).join(', ')}`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  // Every key column must have something in it, or the row can never be
+  // matched and is dead weight in the workbook.
+  const hasKey = sheet.keys.some((k) => String(values[k] ?? '').trim());
+  if (!hasKey) {
+    const error = new Error(`At least one of ${sheet.keys.join(', ')} is required`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const run = writeChain.then(async () => {
+    await ensureWorkbook();
+
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(WORKBOOK);
+
+    const ws = wb.getWorksheet(sheetName) || wb.addWorksheet(sheetName);
+    if (ws.rowCount === 0) {
+      ws.addRow(sheet.columns);
+      ws.getRow(1).font = { bold: true };
+    }
+
+    const row = ws.addRow(sheet.columns.map((c) => String(values[c] ?? '').trim()));
+    row.alignment = { vertical: 'top', wrapText: true };
+
+    await wb.xlsx.writeFile(WORKBOOK);
+
+    // The reader caches on mtime; a same-second write would otherwise be
+    // invisible until the next change.
+    cache = { mtimeMs: 0, sheets: [] };
+
+    return { sheet: sheetName, rowNumber: row.number };
+  });
+
+  writeChain = run.catch(() => {});
+  return run;
+}
+
+module.exports = {
+  search, formatAnswer, stats, ensureWorkbook, addRow,
+  tokenize, identifiers, scoreRow, WORKBOOK, SHEETS
+};

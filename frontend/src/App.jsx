@@ -86,6 +86,15 @@ function StatusPill({ status, detail }) {
   );
 }
 
+/** The user turn immediately preceding a reply — what the answer answers. */
+function questionBefore(messages, replyId) {
+  const index = messages.findIndex((m) => m.id === replyId);
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (messages[i].role === 'user') return messages[i].text;
+  }
+  return '';
+}
+
 function Thinking({ stage }) {
   return (
     <div className="animate-fade-up mx-auto flex w-full max-w-3xl gap-3">
@@ -918,6 +927,7 @@ function Workspace({ onSignOut }) {
                     message={m}
                     canRegenerate={m.id === lastReplyId && !isTyping}
                     onRegenerate={handleRegenerate}
+                    askedQuestion={questionBefore(messages, m.id)}
                   />
                 ))}
                 {isTyping && !last?.text && <Thinking stage={stage} />}

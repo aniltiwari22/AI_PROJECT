@@ -565,3 +565,30 @@ export async function fetchIndexStatus(fileId) {
     return null;
   }
 }
+
+// Sheets an answer can be curated into, and the columns each one expects.
+export async function fetchSheets() {
+  try {
+    const r = await apiFetch(`${API_BASE}/knowledge/sheets`);
+    const b = await r.json().catch(() => ({}));
+    return Array.isArray(b.sheets) ? b.sheets : [];
+  } catch {
+    return [];
+  }
+}
+
+// Promotes an answer into the workbook, where it is returned with no model call.
+export async function curateAnswer(sheet, values) {
+  try {
+    const r = await apiFetch(`${API_BASE}/knowledge/curate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sheet, values })
+    });
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok || !b.success) return { success: false, error: b.error || `Failed (${r.status})` };
+    return b;
+  } catch (error) {
+    return { success: false, error: 'Cannot reach the backend' };
+  }
+}

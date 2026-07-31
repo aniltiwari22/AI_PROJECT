@@ -4,6 +4,7 @@ import CodeBlock from './CodeBlock';
 import DiffBlock from './DiffBlock';
 import SourceList from './SourceList';
 import MessageCost from './MessageCost';
+import SaveAnswer from './SaveAnswer';
 import DevTools from '../workspace/DevTools';
 import { splitFencedBlocks } from '../../lib/markdown';
 
@@ -131,7 +132,7 @@ function AssistantMark() {
   );
 }
 
-export default function ChatComponent1({ message, onRegenerate, canRegenerate }) {
+export default function ChatComponent1({ message, onRegenerate, canRegenerate, askedQuestion }) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
   const isError = message.role === 'error';
