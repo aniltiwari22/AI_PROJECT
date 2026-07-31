@@ -150,3 +150,27 @@ domain, no certificate, and no ARM build:
 Free for personal use, encrypted, nothing exposed to the public internet — and
 repository indexing keeps working, because the code is still on the machine
 holding it. The catch is that the laptop has to stay on.
+
+---
+
+## If the tunnel keeps dropping
+
+`cloudflared` prefers QUIC, which runs over UDP, and UDP is the first thing
+to die behind an aggressive NAT or an ISP that throttles it. Measured on one
+connection here: the control stream failed 534 times in a single session,
+while Telegram's long-poll failed 132 times over the same period — the
+network, not Cloudflare.
+
+Force TCP instead:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8080 --protocol http2
+```
+
+> **The process staying alive does not mean the tunnel is up.** cloudflared
+> sits in its own retry loop long after Cloudflare has withdrawn the hostname
+> from DNS, so `tasklist` shows it running while visitors get NXDOMAIN. Check
+> by requesting the URL from outside, never by looking for the process.
+
+`deploy/tunnel.ps1` does both: forces HTTP/2, polls the URL from outside every
+20 seconds, and starts a fresh process when it stops answering.
