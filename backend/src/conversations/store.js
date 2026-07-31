@@ -14,9 +14,16 @@ const sqlite = require('../storage/sqlite');
 // Long enough that the sidebar stays readable; the full text lives in the row.
 const TITLE_LIMIT = 60;
 
-/** First user message makes the title, until someone renames it. */
+/**
+ * First user message makes the title, until someone renames it.
+ *
+ * Must reject non-strings rather than coerce them: String({}) is
+ * "[object Object]", which is what a client sending a malformed title would
+ * then see in its sidebar forever.
+ */
 function titleFrom(text) {
-  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (typeof text !== 'string') return 'New conversation';
+  const clean = text.replace(/\s+/g, ' ').trim();
   if (!clean) return 'New conversation';
   return clean.length > TITLE_LIMIT ? `${clean.slice(0, TITLE_LIMIT - 1)}…` : clean;
 }

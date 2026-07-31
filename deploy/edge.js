@@ -70,12 +70,31 @@ function proxy(req, res) {
   req.pipe(upstream);
 }
 
+/**
+ * True when `target` is inside `parent` — not merely prefixed by its name.
+ *
+ * A startsWith check would accept `<root>-secrets` for a root of `<root>`,
+ * which is a different directory entirely.
+ */
+function isInside(parent, target) {
+  const relative = path.relative(parent, target);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 function serveStatic(req, res) {
   // Strip the query and refuse anything that climbs out of dist/.
-  const requested = decodeURIComponent((req.url || '/').split('?')[0]);
+  let requested;
+  try {
+    requested = decodeURIComponent((req.url || '/').split('?')[0]);
+  } catch {
+    // Malformed percent-encoding — decodeURIComponent throws on '%zz'.
+    res.writeHead(400).end('Bad request');
+    return;
+  }
+
   const resolved = path.join(ROOT, requested);
 
-  if (!resolved.startsWith(ROOT)) {
+  if (!isInside(ROOT, resolved)) {
     res.writeHead(403).end('Forbidden');
     return;
   }

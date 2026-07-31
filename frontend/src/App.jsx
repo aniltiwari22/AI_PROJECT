@@ -286,12 +286,16 @@ function Workspace({ onSignOut }) {
 
   useEffect(() => { refreshConversations(); }, [refreshConversations]);
 
+  // The effect keeps the ref in step with state, but it only runs after the
+  // commit. Both switch paths below also set it synchronously, or a question
+  // asked in the gap would be appended to the thread that was just left.
   useEffect(() => { conversationRef.current = activeConversationId; }, [activeConversationId]);
 
   const openConversation = useCallback(async (id) => {
     const conversation = await fetchConversation(id);
     if (!conversation) return;
 
+    conversationRef.current = id;
     setActiveConversationId(id);
     setMessages(conversation.messages.length ? conversation.messages : [WELCOME]);
     setSteps([]);
@@ -314,6 +318,7 @@ function Workspace({ onSignOut }) {
     setAttachments([]);
     setSteps([]);
     setRunMeta(null);
+    conversationRef.current = null;
     setActiveConversationId(null);
     voiceRef.current?.shutUp();
     voiceSessionRef.current = null;
